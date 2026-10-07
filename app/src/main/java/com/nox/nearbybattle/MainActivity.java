@@ -48,7 +48,7 @@ public class MainActivity extends Activity {
         Button back = findViewById(R.id.btnGamesBack);
 
         tapWar.setOnClickListener(v ->
-                showMessage("Tap War — game coming next!")
+                showTapWarScreen()
         );
 
         reaction.setOnClickListener(v ->
@@ -67,4 +67,24 @@ public class MainActivity extends Activity {
                 showHomeScreen()
         );
     }
+
+    private void showTapWarScreen() {
+        setContentView(R.layout.activity_tap_war);
+
+        Button player1 = findViewById(R.id.btnPlayer1);
+        Button player2 = findViewById(R.id.btnPlayer2);
+        Button back = findViewById(R.id.btnTapBack);
+
+        player1.setOnClickListener(v ->
+                showMessage("Player 1 tapped!")
+        );
+
+        player2.setOnClickListener(v ->
+                showMessage("Player 2 tapped!")
+        );
+
+        back.setOnClickListener(v ->
+                showGamesScreen()
+        );
     }
+}
