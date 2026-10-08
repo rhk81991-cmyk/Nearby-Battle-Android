@@ -124,7 +124,8 @@ public class MainActivity extends Activity {
         );
 
         rps.setOnClickListener(v ->
-                showMessage("Rock Paper Scissors — game coming next!")
+        new RockPaperScissorsGame(this).start()
+
         );
 
         numberRush.setOnClickListener(v ->
