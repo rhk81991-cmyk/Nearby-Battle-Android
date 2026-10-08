@@ -901,6 +901,51 @@ public class BluetoothBattle {
         return result.get();
     }
 
+// BLUETOOTH GAMES SCREEN
+
+    private void showBluetoothGamesScreen() {
+    LinearLayout gameLayout = new LinearLayout(activity);
+    gameLayout.setOrientation(LinearLayout.VERTICAL);
+    gameLayout.setPadding(24, 24, 24, 24);
+
+    gameLayout.setBackgroundColor(
+            android.graphics.Color.rgb(18, 18, 28)
+    );
+
+    TextView title = new TextView(activity);
+    title.setText("⚔️ NoX Bluetooth Games");
+    title.setTextSize(25);
+    title.setTextColor(android.graphics.Color.WHITE);
+    gameLayout.addView(title);
+
+    TextView info = new TextView(activity);
+    info.setText(
+            "Choose a game to play with your connected opponent."
+    );
+    info.setTextSize(16);
+    info.setTextColor(android.graphics.Color.LTGRAY);
+    info.setPadding(0, 20, 0, 20);
+    gameLayout.addView(info);
+
+    Button tapWarButton = makeButton("👆 TAP WAR");
+    gameLayout.addView(tapWarButton);
+
+    Button backButton = makeButton("⬅ BACK TO BLUETOOTH");
+    gameLayout.addView(backButton);
+
+    activity.setContentView(gameLayout);
+
+    tapWarButton.setOnClickListener(v ->
+            Toast.makeText(
+                    activity,
+                    "Tap War multiplayer is the next step!",
+                    Toast.LENGTH_SHORT
+            ).show()
+    );
+
+    backButton.setOnClickListener(v -> showScreen());
+    }
+
     // SEND MESSAGE: ONLY AFTER AUTHENTICATION
 
     private void sendMessage(String message) {
