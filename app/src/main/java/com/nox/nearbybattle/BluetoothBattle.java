@@ -979,6 +979,10 @@ public class BluetoothBattle {
 
             if (sendButton != null) {
                 sendButton.setEnabled(false);
+        
+            if (startBattleButton != null) {
+                startBattleButton.setEnabled(false);
+                }
             }
         });
     }
