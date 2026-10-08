@@ -129,7 +129,8 @@ public class MainActivity extends Activity {
         );
 
         numberRush.setOnClickListener(v ->
-                showMessage("Number Rush — game coming next!")
+        new NumberRushGame(this).start()
+  
         );
 
         back.setOnClickListener(v ->
