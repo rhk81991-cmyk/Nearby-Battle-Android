@@ -66,6 +66,7 @@ public class BluetoothBattle {
     private Button hostButton;
     private Button scanButton;
     private Button sendButton;
+    private Button startBattleButton;
 
     private final ArrayList<BluetoothDevice> devices =
             new ArrayList<>();
