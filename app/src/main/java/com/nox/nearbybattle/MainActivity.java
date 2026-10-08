@@ -103,7 +103,7 @@ public class MainActivity extends Activity {
 
     // GAME HUB
 
-    private void showGamesScreen() {
+    public void showGamesScreen() {
         stopTapWarTimer();
         stopReactionDelay();
 
