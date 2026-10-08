@@ -2,6 +2,7 @@ package com.nox.nearbybattle;
 
 import android.Manifest;
 import android.app.Activity;
+import android.app.AlertDialog;
 import android.bluetooth.BluetoothAdapter;
 import android.bluetooth.BluetoothDevice;
 import android.bluetooth.BluetoothServerSocket;
@@ -14,35 +15,54 @@ import android.content.pm.PackageManager;
 import android.os.Build;
 import android.os.Handler;
 import android.os.Looper;
+import android.text.InputType;
 import android.widget.Button;
+import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.TextView;
 import android.widget.Toast;
 
+import java.io.BufferedReader;
+import java.io.BufferedWriter;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.OutputStream;
+import java.io.InputStreamReader;
+import java.io.OutputStreamWriter;
+import java.nio.charset.StandardCharsets;
+import java.security.MessageDigest;
 import java.util.ArrayList;
 import java.util.Set;
 import java.util.UUID;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicReference;
 
 public class BluetoothBattle {
 
     private final Activity activity;
-    private final Handler handler = new Handler(Looper.getMainLooper());
+    private final Handler handler =
+            new Handler(Looper.getMainLooper());
 
     private BluetoothAdapter bluetoothAdapter;
-    private BluetoothSocket bluetoothSocket;
+    private volatile BluetoothSocket bluetoothSocket;
     private BluetoothServerSocket serverSocket;
 
     private Thread workerThread;
+
     private volatile boolean running = false;
+    private volatile boolean roomVerified = false;
+    private volatile String roomPassword = "";
+
+    private volatile BufferedReader socketReader;
+    private volatile BufferedWriter socketWriter;
+
+    private final Object writeLock = new Object();
 
     private LinearLayout root;
     private LinearLayout deviceList;
     private TextView statusText;
     private TextView messagesText;
+
     private Button hostButton;
     private Button scanButton;
     private Button sendButton;
@@ -79,8 +99,7 @@ public class BluetoothBattle {
             activity.requestPermissions(
                     new String[]{
                             Manifest.permission.BLUETOOTH_CONNECT,
-                            Manifest.permission.BLUETOOTH_SCAN,
-                            Manifest.permission.ACCESS_FINE_LOCATION
+                            Manifest.permission.BLUETOOTH_SCAN
                     },
                     7001
             );
@@ -195,7 +214,6 @@ public class BluetoothBattle {
         );
 
         content.addView(deviceList);
-
         content.addView(sendButton);
 
         messagesText = new TextView(activity);
@@ -209,26 +227,20 @@ public class BluetoothBattle {
         content.addView(messagesText);
 
         Button backButton = makeButton("⬅ BACK TO HOME");
-
         content.addView(backButton);
 
         scrollView.addView(content);
+
         root.addView(
                 scrollView,
-                new LinearLayout.LayoutParams(
-                        -1, 0, 1
-                )
+                new LinearLayout.LayoutParams(-1, 0, 1)
         );
 
         activity.setContentView(root);
 
-        hostButton.setOnClickListener(v ->
-                createRoom()
-        );
+        hostButton.setOnClickListener(v -> createRoom());
 
-        scanButton.setOnClickListener(v ->
-                discoverDevices()
-        );
+        scanButton.setOnClickListener(v -> discoverDevices());
 
         sendButton.setEnabled(false);
 
@@ -238,6 +250,7 @@ public class BluetoothBattle {
 
         backButton.setOnClickListener(v -> {
             stop();
+
             if (activity instanceof MainActivity) {
                 ((MainActivity) activity).showHomeScreen();
             }
@@ -267,9 +280,50 @@ public class BluetoothBattle {
         });
     }
 
-    // CREATE ROOM
+    private void setSendEnabled(boolean enabled) {
+        handler.post(() -> {
+            if (sendButton != null) {
+                sendButton.setEnabled(enabled);
+            }
+        });
+    }
+
+    // CREATE PROTECTED ROOM
 
     private void createRoom() {
+        EditText passwordInput = new EditText(activity);
+
+        passwordInput.setHint("Set room password");
+        passwordInput.setSingleLine(true);
+        passwordInput.setInputType(
+                InputType.TYPE_CLASS_TEXT
+                        | InputType.TYPE_TEXT_VARIATION_PASSWORD
+        );
+
+        new AlertDialog.Builder(activity)
+                .setTitle("🔒 Create Room")
+                .setMessage("Set a password for your room.")
+                .setView(passwordInput)
+                .setNegativeButton("Cancel", null)
+                .setPositiveButton("Create", (dialog, which) -> {
+                    String password =
+                            passwordInput.getText().toString();
+
+                    if (password.trim().isEmpty()) {
+                        Toast.makeText(
+                                activity,
+                                "Password cannot be empty.",
+                                Toast.LENGTH_SHORT
+                        ).show();
+                        return;
+                    }
+
+                    startRoomServer(password);
+                })
+                .show();
+    }
+
+    private void startRoomServer(String password) {
         if (!hasBluetoothPermissions()) {
             start();
             return;
@@ -277,43 +331,61 @@ public class BluetoothBattle {
 
         stopWorkerOnly();
 
-        updateStatus("Creating room. Waiting for a player...");
-        hostButton.setEnabled(false);
+        roomPassword = password;
+        roomVerified = false;
+
+        updateStatus("Creating protected room...");
+        setSendEnabled(false);
+
+        handler.post(() -> {
+            hostButton.setEnabled(false);
+            scanButton.setEnabled(false);
+        });
 
         workerThread = new Thread(() -> {
             try {
                 serverSocket =
-                        bluetoothAdapter.listenUsingRfcommWithServiceRecord(
-                                SERVICE_NAME,
-                                APP_UUID
-                        );
+                        bluetoothAdapter
+                                .listenUsingRfcommWithServiceRecord(
+                                        SERVICE_NAME,
+                                        APP_UUID
+                                );
+
+                updateStatus(
+                        "Room ready. Waiting for a player..."
+                );
 
                 BluetoothSocket socket =
                         serverSocket.accept();
 
-                serverSocket.close();
-                serverSocket = null;
+                if (serverSocket != null) {
+                    serverSocket.close();
+                    serverSocket = null;
+                }
 
-                connected(socket);
+                connected(socket, true);
 
             } catch (SecurityException e) {
-                updateStatus(
-                        "Bluetooth permission missing."
-                );
-                hostButton.setEnabled(true);
+                updateStatus("Bluetooth permission missing.");
+                resetConnectionButtons();
 
             } catch (IOException e) {
-                updateStatus(
-                        "Room closed or connection failed."
-                );
-                hostButton.setEnabled(true);
+                if (running) {
+                    updateStatus(
+                            "Room closed or connection failed."
+                    );
+                } else {
+                    updateStatus("Room closed.");
+                }
+
+                resetConnectionButtons();
             }
         });
 
         workerThread.start();
     }
 
-    // JOIN ROOM: FIND DEVICES
+    // DISCOVER DEVICES
 
     private void discoverDevices() {
         if (!hasBluetoothPermissions()) {
@@ -326,9 +398,7 @@ public class BluetoothBattle {
         devices.clear();
         deviceList.removeAllViews();
 
-        updateStatus(
-                "Searching for devices... Pairing may be required."
-        );
+        updateStatus("Searching for devices...");
 
         try {
             Set<BluetoothDevice> paired =
@@ -359,6 +429,7 @@ public class BluetoothBattle {
                         if (device != null) {
                             addDevice(device);
                         }
+
                     } else if (
                             BluetoothAdapter.ACTION_DISCOVERY_FINISHED
                                     .equals(action)
@@ -370,13 +441,9 @@ public class BluetoothBattle {
                 }
             };
 
-            IntentFilter filter =
-                    new IntentFilter();
+            IntentFilter filter = new IntentFilter();
 
-            filter.addAction(
-                    BluetoothDevice.ACTION_FOUND
-            );
-
+            filter.addAction(BluetoothDevice.ACTION_FOUND);
             filter.addAction(
                     BluetoothAdapter.ACTION_DISCOVERY_FINISHED
             );
@@ -394,8 +461,7 @@ public class BluetoothBattle {
                 );
             }
 
-            boolean started =
-                    bluetoothAdapter.startDiscovery();
+            boolean started = bluetoothAdapter.startDiscovery();
 
             if (!started) {
                 updateStatus(
@@ -404,9 +470,7 @@ public class BluetoothBattle {
             }
 
         } catch (SecurityException e) {
-            updateStatus(
-                    "Bluetooth permission denied."
-            );
+            updateStatus("Bluetooth permission denied.");
         }
     }
 
@@ -445,11 +509,9 @@ public class BluetoothBattle {
         });
     }
 
-    // CONNECT TO DEVICE
+    // CONNECT TO ROOM HOST
 
-    private void connectToDevice(
-            BluetoothDevice device
-    ) {
+    private void connectToDevice(BluetoothDevice device) {
         if (!hasBluetoothPermissions()) {
             start();
             return;
@@ -458,8 +520,15 @@ public class BluetoothBattle {
         stopDiscovery();
         stopWorkerOnly();
 
-        updateStatus("Connecting...");
-        scanButton.setEnabled(false);
+        roomVerified = false;
+        setSendEnabled(false);
+
+        updateStatus("Connecting to room...");
+
+        handler.post(() -> {
+            scanButton.setEnabled(false);
+            hostButton.setEnabled(false);
+        });
 
         workerThread = new Thread(() -> {
             BluetoothSocket socket = null;
@@ -476,102 +545,379 @@ public class BluetoothBattle {
 
                 socket.connect();
 
-                connected(socket);
+                connected(socket, false);
 
             } catch (SecurityException e) {
                 closeSocket(socket);
-                updateStatus(
-                        "Bluetooth permission missing."
-                );
-                scanButton.setEnabled(true);
+
+                updateStatus("Bluetooth permission missing.");
+                resetConnectionButtons();
 
             } catch (IOException e) {
                 closeSocket(socket);
+
                 updateStatus(
                         "Connection failed. Pair devices and try again."
                 );
-                scanButton.setEnabled(true);
+
+                resetConnectionButtons();
             }
         });
 
         workerThread.start();
     }
 
-    // CONNECTED: READ AND WRITE MESSAGES
+    // CONNECTION AND PASSWORD VERIFICATION
 
-    private void connected(BluetoothSocket socket) {
+    private void connected(
+            BluetoothSocket socket,
+            boolean isHost
+    ) {
         bluetoothSocket = socket;
+        roomVerified = false;
         running = true;
 
-        updateStatus("✅ Bluetooth connected!");
-        addMessage("Connection established.");
-
-        handler.post(() -> {
-            sendButton.setEnabled(true);
-            hostButton.setEnabled(false);
-            scanButton.setEnabled(false);
-        });
+        setSendEnabled(false);
 
         try {
-            InputStream input =
-                    socket.getInputStream();
+            BufferedReader reader = new BufferedReader(
+                    new InputStreamReader(
+                            socket.getInputStream(),
+                            StandardCharsets.UTF_8
+                    )
+            );
 
-            OutputStream output =
-                    socket.getOutputStream();
+            BufferedWriter writer = new BufferedWriter(
+                    new OutputStreamWriter(
+                            socket.getOutputStream(),
+                            StandardCharsets.UTF_8
+                    )
+            );
 
-            byte[] buffer = new byte[1024];
+            socketReader = reader;
+            socketWriter = writer;
 
-            while (running) {
-                int count = input.read(buffer);
-
-                if (count == -1) {
-                    break;
-                }
-
-                String message = new String(
-                        buffer,
-                        0,
-                        count,
-                        java.nio.charset.StandardCharsets.UTF_8
+            if (isHost) {
+                updateStatus(
+                        "Player connected. Verifying password..."
                 );
 
-                addMessage("Opponent: " + message);
-            }
+                addMessage("Player connected.");
 
-        } catch (IOException e) {
-            updateStatus("Connection disconnected.");
-        } finally {
-            closeSocket(socket);
-            running = false;
+                writeLine("PASSWORD_REQUIRED");
+
+                String request = reader.readLine();
+
+                if (request == null
+                        || !request.startsWith("AUTH:")) {
+                    writeLine("AUTH_FAIL");
+                    throw new IOException(
+                            "Invalid authentication request."
+                    );
+                }
+
+                String suppliedPassword;
+
+                try {
+                    byte[] decoded =
+                            android.util.Base64.decode(
+                                    request.substring(5),
+                                    android.util.Base64.NO_WRAP
+                            );
+
+                    suppliedPassword =
+                            new String(
+                                    decoded,
+                                    StandardCharsets.UTF_8
+                            );
+
+                } catch (IllegalArgumentException e) {
+                    writeLine("AUTH_FAIL");
+                    throw new IOException(
+                            "Invalid password format."
+                    );
+                }
+
+                boolean correct = MessageDigest.isEqual(
+                        roomPassword.getBytes(StandardCharsets.UTF_8),
+                        suppliedPassword.getBytes(StandardCharsets.UTF_8)
+                );
+
+                if (!correct) {
+                    writeLine("AUTH_FAIL");
+
+                    updateStatus(
+                            "❌ Wrong password. Connection rejected."
+                    );
+
+                    addMessage("Authentication failed.");
+                    return;
+                }
+
+                writeLine("AUTH_OK");
+
+            } else {
+                updateStatus(
+                        "Connected. Enter the room password..."
+                );
+
+                String serverMessage = reader.readLine();
+
+                if (!"PASSWORD_REQUIRED".equals(serverMessage)) {
+                    throw new IOException(
+                            "Host did not request authentication."
+                    );
+                }
+
+                String password = requestJoinPassword();
+
+                if (password == null) {
+                    writeLine("AUTH_CANCEL");
+
+                    updateStatus("Room join cancelled.");
+                    return;
+                }
+
+                writeLine(
+                        "AUTH:"
+                                + android.util.Base64.encodeToString(
+                                password.getBytes(StandardCharsets.UTF_8),
+                                android.util.Base64.NO_WRAP
+                        )
+                );
+
+                String result = reader.readLine();
+
+                if (!"AUTH_OK".equals(result)) {
+                    updateStatus(
+                            "❌ Wrong password or room access denied."
+                    );
+
+                    addMessage("Room access denied.");
+                    return;
+                              }
+                    }
+                  // Only successful authentication reaches this point.
+
+            roomVerified = true;
+
+            updateStatus("✅ Room verified! Bluetooth connected.");
+            addMessage("✅ Password verified. Room joined.");
 
             handler.post(() -> {
-                sendButton.setEnabled(false);
-                hostButton.setEnabled(true);
-                scanButton.setEnabled(true);
+                if (hostButton != null) {
+                    hostButton.setEnabled(false);
+                }
+
+                if (scanButton != null) {
+                    scanButton.setEnabled(false);
+                }
+
+                if (sendButton != null) {
+                    sendButton.setEnabled(true);
+                }
             });
+
+            String line;
+
+            while (running
+                    && roomVerified
+                    && (line = reader.readLine()) != null) {
+
+                if (line.startsWith("MSG:")) {
+                    try {
+                        byte[] decoded =
+                                android.util.Base64.decode(
+                                        line.substring(4),
+                                        android.util.Base64.NO_WRAP
+                                );
+
+                        String message =
+                                new String(
+                                        decoded,
+                                        StandardCharsets.UTF_8
+                                );
+
+                        addMessage("Opponent: " + message);
+
+                    } catch (IllegalArgumentException e) {
+                        addMessage("Received an invalid message.");
+                    }
+                }
+            }
+
+        } catch (SecurityException e) {
+            updateStatus("Bluetooth permission missing.");
+
+        } catch (IOException e) {
+            if (running) {
+                updateStatus(
+                        "Connection ended or authentication failed."
+                );
+            }
+
+        } finally {
+            roomVerified = false;
+            running = false;
+
+            if (bluetoothSocket == socket) {
+                bluetoothSocket = null;
+                socketReader = null;
+                socketWriter = null;
+            }
+
+            closeSocket(socket);
+
+            setSendEnabled(false);
+            resetConnectionButtons();
         }
     }
 
-    private void sendMessage(String message) {
-        BluetoothSocket socket = bluetoothSocket;
+    // JOINER PASSWORD DIALOG
+    // Called from the connection worker thread.
 
-        if (socket == null || !socket.isConnected()) {
+    private String requestJoinPassword() {
+        CountDownLatch latch = new CountDownLatch(1);
+
+        AtomicReference<String> result =
+                new AtomicReference<>(null);
+
+        handler.post(() -> {
+            if (activity.isFinishing()) {
+                latch.countDown();
+                return;
+            }
+
+            EditText input = new EditText(activity);
+
+            input.setHint("Enter room password");
+            input.setSingleLine(true);
+
+            input.setInputType(
+                    InputType.TYPE_CLASS_TEXT
+                            | InputType.TYPE_TEXT_VARIATION_PASSWORD
+            );
+
+            AlertDialog dialog =
+                    new AlertDialog.Builder(activity)
+                            .setTitle("🔒 Join Protected Room")
+                            .setMessage(
+                                    "Enter the password set by the host."
+                            )
+                            .setView(input)
+                            .setPositiveButton(
+                                    "Join",
+                                    null
+                            )
+                            .setNegativeButton(
+                                    "Cancel",
+                                    (d, which) -> {
+                                        result.set(null);
+                                        latch.countDown();
+                                    }
+                            )
+                            .create();
+
+            dialog.setOnCancelListener(d -> {
+                result.set(null);
+                latch.countDown();
+            });
+
+            dialog.setOnShowListener(d -> {
+                Button joinButton =
+                        dialog.getButton(
+                                AlertDialog.BUTTON_POSITIVE
+                        );
+
+                joinButton.setOnClickListener(v -> {
+                    String password =
+                            input.getText().toString();
+
+                    if (password.trim().isEmpty()) {
+                        input.setError(
+                                "Password cannot be empty."
+                        );
+                        return;
+                    }
+
+                    result.set(password);
+                    latch.countDown();
+                    dialog.dismiss();
+                });
+            });
+
+            dialog.show();
+
+            // Apply the button listener after showing the dialog.
+            dialog.getButton(
+                    AlertDialog.BUTTON_POSITIVE
+            ).setOnClickListener(v -> {
+                String password =
+                        input.getText().toString();
+
+                if (password.trim().isEmpty()) {
+                    input.setError(
+                            "Password cannot be empty."
+                    );
+                    return;
+                }
+
+                result.set(password);
+                latch.countDown();
+                dialog.dismiss();
+            });
+        });
+
+        try {
+            if (!latch.await(2, TimeUnit.MINUTES)) {
+                return null;
+            }
+
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return null;
+        }
+
+        return result.get();
+    }
+
+    // SEND MESSAGE: ONLY AFTER AUTHENTICATION
+
+    private void sendMessage(String message) {
+        if (!roomVerified) {
+            updateStatus(
+                    "🔒 Verify the room password first."
+            );
+            return;
+        }
+
+        BluetoothSocket socket = bluetoothSocket;
+        BufferedWriter writer = socketWriter;
+
+        if (socket == null
+                || writer == null
+                || !socket.isConnected()) {
             updateStatus("No connected player.");
             return;
         }
 
         new Thread(() -> {
             try {
-                OutputStream output =
-                        socket.getOutputStream();
+                String encoded =
+                        android.util.Base64.encodeToString(
+                                message.getBytes(StandardCharsets.UTF_8),
+                                android.util.Base64.NO_WRAP
+                        );
 
-                output.write(
-                        (message + "\n").getBytes(
-                                java.nio.charset.StandardCharsets.UTF_8
-                        )
-                );
+                synchronized (writeLock) {
+                    if (!roomVerified || socketWriter != writer) {
+                        return;
+                    }
 
-                output.flush();
+                    writer.write("MSG:" + encoded);
+                    writer.newLine();
+                    writer.flush();
+                }
 
                 addMessage("You: " + message);
 
@@ -581,6 +927,19 @@ public class BluetoothBattle {
         }).start();
     }
 
+    private void writeLine(String line) throws IOException {
+        BufferedWriter writer = socketWriter;
+
+        if (writer == null) {
+            throw new IOException("Connection output is unavailable.");
+        }
+
+        synchronized (writeLock) {
+            writer.write(line);
+            writer.newLine();
+            writer.flush();
+        }
+    }
     // PERMISSIONS
 
     private boolean hasBluetoothPermissions() {
@@ -604,6 +963,22 @@ public class BluetoothBattle {
 
     // CLEANUP
 
+    private void resetConnectionButtons() {
+        handler.post(() -> {
+            if (hostButton != null) {
+                hostButton.setEnabled(true);
+            }
+
+            if (scanButton != null) {
+                scanButton.setEnabled(true);
+            }
+
+            if (sendButton != null) {
+                sendButton.setEnabled(false);
+            }
+        });
+    }
+
     private void stopDiscovery() {
         try {
             if (bluetoothAdapter != null
@@ -616,9 +991,7 @@ public class BluetoothBattle {
 
         if (discoveryReceiver != null) {
             try {
-                activity.unregisterReceiver(
-                        discoveryReceiver
-                );
+                activity.unregisterReceiver(discoveryReceiver);
             } catch (IllegalArgumentException ignored) {
             }
 
@@ -628,6 +1001,7 @@ public class BluetoothBattle {
 
     private void stopWorkerOnly() {
         running = false;
+        roomVerified = false;
 
         stopDiscovery();
 
@@ -639,8 +1013,13 @@ public class BluetoothBattle {
         } catch (IOException ignored) {
         }
 
-        closeSocket(bluetoothSocket);
+        BluetoothSocket oldSocket = bluetoothSocket;
+
         bluetoothSocket = null;
+        socketReader = null;
+        socketWriter = null;
+
+        closeSocket(oldSocket);
     }
 
     private void closeSocket(BluetoothSocket socket) {
@@ -654,6 +1033,8 @@ public class BluetoothBattle {
 
     public void stop() {
         stopWorkerOnly();
+
+        roomPassword = "";
 
         if (workerThread != null) {
             workerThread.interrupt();
