@@ -195,9 +195,12 @@ public class BluetoothBattle {
         hostButton = makeButton("👑 CREATE ROOM");
         scanButton = makeButton("🔍 JOIN ROOM");
         sendButton = makeButton("💬 SEND TEST MESSAGE");
+        startBattleButton = makeButton("⚔️ START BATTLE");
+        startBattleButton.setEnabled(false);
 
         content.addView(hostButton);
         content.addView(scanButton);
+        content.addView(startBattleButton);
 
         TextView devicesTitle = new TextView(activity);
         devicesTitle.setText("Available devices");
