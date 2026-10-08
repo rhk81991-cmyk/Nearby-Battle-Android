@@ -23,6 +23,7 @@
         android:usesPermissionFlags="neverForLocation" />
 
     <application
+        android:icon="@drawable/ic_launcher"
         android:allowBackup="true"
         android:label="Nearby Battle"
         android:supportsRtl="true"
