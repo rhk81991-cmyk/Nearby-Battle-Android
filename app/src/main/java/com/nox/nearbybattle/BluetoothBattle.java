@@ -251,6 +251,19 @@ public class BluetoothBattle {
         sendButton.setOnClickListener(v ->
                 sendMessage("Hello from NoX!")
         );
+        startBattleButton.setOnClickListener(v -> {
+    
+            if (!roomVerified || bluetoothSocket == null) {
+                Toast.makeText(
+                activity,
+                "Connect to a player first!",
+                Toast.LENGTH_SHORT
+        ).show();
+        return;
+    }
+
+    showBluetoothGamesScreen();
+});
 
         backButton.setOnClickListener(v -> {
             stop();
@@ -719,6 +732,9 @@ public class BluetoothBattle {
 
                 if (sendButton != null) {
                     sendButton.setEnabled(true);
+                    
+                if (startBattleButton != null) {
+                startBattleButton.setEnabled(true);
                 }
             });
 
@@ -967,25 +983,25 @@ public class BluetoothBattle {
 
     // CLEANUP
 
-    private void resetConnectionButtons() {
-        handler.post(() -> {
-            if (hostButton != null) {
-                hostButton.setEnabled(true);
-            }
+private void resetConnectionButtons() {
+    handler.post(() -> {
+        if (hostButton != null) {
+            hostButton.setEnabled(true);
+        }
 
-            if (scanButton != null) {
-                scanButton.setEnabled(true);
-            }
+        if (scanButton != null) {
+            scanButton.setEnabled(true);
+        }
 
-            if (sendButton != null) {
-                sendButton.setEnabled(false);
-        
-            if (startBattleButton != null) {
-                startBattleButton.setEnabled(false);
-                }
-            }
-        });
-    }
+        if (sendButton != null) {
+            sendButton.setEnabled(false);
+        }
+
+        if (startBattleButton != null) {
+            startBattleButton.setEnabled(false);
+        }
+    });
+}
 
     private void stopDiscovery() {
         try {
