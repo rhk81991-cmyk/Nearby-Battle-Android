@@ -78,7 +78,7 @@ public class MainActivity extends Activity {
 
     // HOME SCREEN
 
-    private void showHomeScreen() {
+    public void showHomeScreen() {
         stopTapWarTimer();
         stopReactionDelay();
 
