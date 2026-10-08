@@ -89,7 +89,8 @@ public class MainActivity extends Activity {
         Button gamesButton = findViewById(R.id.btnGames);
 
         bluetoothButton.setOnClickListener(v ->
-                showMessage("Bluetooth Battle — coming next!")
+        new BluetoothBattle(this).start()
+
         );
 
         offlineButton.setOnClickListener(v ->
